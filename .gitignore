@@ -1,0 +1,25 @@
+# Credenziali e segreti - NON committare mai
+.env
+credentials.json
+*.json.key
+
+# Ambiente virtuale Python
+venv/
+.venv/
+env/
+
+# Cache e file compilati Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# File di log
+*.log
+
+# File di sistema
+.DS_Store
+Thumbs.db
+
+# Configurazione IDE
+.vscode/
+.idea/
