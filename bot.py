@@ -19,6 +19,10 @@ from telegram.ext import (
     filters,
 )
 
+import time
+import random
+from google.genai import errors as genai_errors
+
 # ---------------------------------------------------------------------------
 # Configurazione (le credenziali NON vanno scritte nel codice: usare un file
 # .env nella stessa cartella, con queste chiavi)
@@ -90,7 +94,7 @@ def get_sheet():
     return _sheet
 
 
-def _call_gemini(word: str) -> WordAnalysis:
+#def _call_gemini(word: str) -> WordAnalysis:
     """Chiamata bloccante a Gemini, da eseguire in un thread separato."""
     prompt = (
         f"Analizza la parola inglese '{word}'. Se la parola ha più funzioni "
@@ -111,6 +115,52 @@ def _call_gemini(word: str) -> WordAnalysis:
     # Con response_schema impostato, la libreria fornisce già l'oggetto
     # validato tramite .parsed: non serve rifare il parsing manuale del JSON.
     return response.parsed
+
+def _call_gemini(word: str, max_retries: int = 5, base_delay: float = 2.0) -> WordAnalysis:
+    """Chiamata bloccante a Gemini, da eseguire in un thread separato.
+    Riprova automaticamente in caso di errori temporanei (503, 429, ecc.)."""
+    prompt = (
+        f"Analizza la parola inglese '{word}'. Se la parola ha più funzioni "
+        f"grammaticali (es. sia sostantivo che verbo), crea una voce separata "
+        f"per ciascuna. Per ogni funzione grammaticale indica: il tipo "
+        f"(sostantivo, verbo, aggettivo, avverbio), la traduzione in italiano "
+        f"specifica per quel significato, 3 sinonimi e 2 frasi di esempio con "
+        f"traduzione."
+    )
+
+    last_exception = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = ai_client.models.generate_content(
+                model="gemini-3.6-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=WordAnalysis,
+                ),
+            )
+            return response.parsed
+
+        except genai_errors.ServerError as e:
+            last_exception = e
+            status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
+
+            # Se non è un errore temporaneo (es. 400, 401, 403), non ha senso ritentare
+            if status_code not in {429, 500, 503, 504} and status_code is not None:
+                raise
+
+            if attempt == max_retries:
+                break
+
+            delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+            logger.warning(
+                "Gemini non disponibile per '%s' (tentativo %d/%d, status=%s). Riprovo tra %.1fs...",
+                word, attempt, max_retries, status_code, delay,
+            )
+            time.sleep(delay)
+
+    logger.error("Gemini non disponibile per '%s' dopo %d tentativi", word, max_retries)
+    raise last_exception
 
 
 def _append_rows_to_sheet(rows: list[list[str]]) -> None:
